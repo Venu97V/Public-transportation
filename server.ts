@@ -336,6 +336,23 @@ async function startServer() {
 
   wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'init', payload: broker.getSnapshot() }));
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString()) as { type?: string; clientTs?: number };
+        if (msg.type === 'ping' && typeof msg.clientTs === 'number') {
+          ws.send(
+            JSON.stringify({
+              type: 'pong',
+              clientTs: msg.clientTs,
+              serverTs: Date.now(),
+            })
+          );
+        }
+      } catch {
+        // Ignore malformed client frames
+      }
+    });
   });
 
   broker.subscribe((msg) => {

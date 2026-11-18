@@ -7,18 +7,28 @@ import type {
   StreamScenario,
 } from '../types/kafka';
 
-interface WsPayload {
-  type: 'init' | 'snapshot' | 'event';
-  payload: BrokerSnapshot | { record: KafkaSentimentRecord; snapshot: BrokerSnapshot };
-}
+type WsPayload =
+  | { type: 'init' | 'snapshot'; payload: BrokerSnapshot }
+  | { type: 'event'; payload: { record: KafkaSentimentRecord; snapshot: BrokerSnapshot } }
+  | { type: 'pong'; clientTs: number; serverTs: number };
+
+const HEARTBEAT_INTERVAL_MS = 4000;
+const HEARTBEAT_TIMEOUT_MS = 10000;
 
 export function useKafkaStream() {
   const [snapshot, setSnapshot] = useState<BrokerSnapshot | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [lastHeartbeatAt, setLastHeartbeatAt] = useState<number | null>(null);
+  const [heartbeatSeq, setHeartbeatSeq] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPingSentRef = useRef<number | null>(null);
+  const lastPongAtRef = useRef<number>(0);
 
   const fetchSnapshot = useCallback(async () => {
     try {
@@ -37,6 +47,29 @@ export function useKafkaStream() {
   useEffect(() => {
     let unmounted = false;
 
+    const clearHeartbeat = () => {
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+    };
+
+    const sendPing = (socket: WebSocket) => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      const now = Date.now();
+      if (
+        lastPingSentRef.current !== null &&
+        lastPongAtRef.current < lastPingSentRef.current &&
+        now - lastPingSentRef.current > HEARTBEAT_TIMEOUT_MS
+      ) {
+        setWsConnected(false);
+        socket.close();
+        return;
+      }
+      lastPingSentRef.current = now;
+      socket.send(JSON.stringify({ type: 'ping', clientTs: now }));
+    };
+
     const connect = () => {
       if (unmounted) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -45,25 +78,35 @@ export function useKafkaStream() {
       wsRef.current = socket;
 
       socket.onopen = () => {
-        if (!unmounted) {
-          setWsConnected(true);
-          setError(null);
-        }
+        if (unmounted) return;
+        setWsConnected(true);
+        setError(null);
+        lastPongAtRef.current = Date.now();
+        lastPingSentRef.current = null;
+        sendPing(socket);
+        clearHeartbeat();
+        heartbeatIntervalRef.current = setInterval(() => {
+          sendPing(socket);
+        }, HEARTBEAT_INTERVAL_MS);
       };
 
       socket.onmessage = (event) => {
         if (unmounted) return;
         try {
           const msg = JSON.parse(event.data as string) as WsPayload;
-          if (msg.type === 'init' || msg.type === 'snapshot') {
-            setSnapshot(msg.payload as BrokerSnapshot);
+          if (msg.type === 'pong') {
+            const now = Date.now();
+            lastPongAtRef.current = now;
+            const rtt = Math.max(1, Math.round(now - msg.clientTs));
+            setLatencyMs(rtt);
+            setLastHeartbeatAt(now);
+            setHeartbeatSeq((prev) => prev + 1);
+            setWsConnected(true);
+          } else if (msg.type === 'init' || msg.type === 'snapshot') {
+            setSnapshot(msg.payload);
             setLoading(false);
           } else if (msg.type === 'event') {
-            const payload = msg.payload as {
-              record: KafkaSentimentRecord;
-              snapshot: BrokerSnapshot;
-            };
-            setSnapshot(payload.snapshot);
+            setSnapshot(msg.payload.snapshot);
             setLoading(false);
           }
         } catch {
@@ -73,6 +116,7 @@ export function useKafkaStream() {
 
       socket.onclose = () => {
         if (unmounted) return;
+        clearHeartbeat();
         setWsConnected(false);
         reconnectTimerRef.current = setTimeout(connect, 2000);
       };
@@ -89,6 +133,7 @@ export function useKafkaStream() {
 
     return () => {
       unmounted = true;
+      clearHeartbeat();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) wsRef.current.close();
     };
@@ -176,6 +221,9 @@ export function useKafkaStream() {
   return {
     snapshot,
     wsConnected,
+    latencyMs,
+    lastHeartbeatAt,
+    heartbeatSeq,
     loading,
     error,
     updateStreamControl,

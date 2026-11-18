@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
+import { motion } from 'motion/react';
 import {
   Activity,
   BookOpen,
   Download,
   GitBranch,
+  HeartPulse,
   Keyboard,
   Menu,
   Plus,
@@ -41,6 +43,9 @@ export default function App() {
   const {
     snapshot,
     wsConnected,
+    latencyMs,
+    lastHeartbeatAt,
+    heartbeatSeq,
     loading,
     error,
     updateStreamControl,
@@ -252,7 +257,68 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-3 shrink-0">
+            {/* Real-Time WebSocket Heartbeat & RTT Latency Indicator */}
+            <div
+              className="hidden sm:flex items-center gap-2 pr-3 border-r border-slate-200 text-xs whitespace-nowrap shrink-0"
+              role="status"
+              aria-live="polite"
+              title={
+                wsConnected
+                  ? `WebSocket Connected${
+                      latencyMs !== null ? ` · RTT ${latencyMs} ms` : ''
+                    }${
+                      lastHeartbeatAt
+                        ? ` · Last heartbeat ${new Date(lastHeartbeatAt).toTimeString().slice(0, 8)}`
+                        : ''
+                    }`
+                  : 'WebSocket Reconnecting...'
+              }
+            >
+              <motion.span
+                key={wsConnected ? heartbeatSeq : 'offline'}
+                initial={wsConnected ? { scale: 1.25, opacity: 0.7 } : false}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                className="inline-flex items-center"
+              >
+                <HeartPulse
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    !wsConnected
+                      ? 'text-red-600'
+                      : latencyMs !== null && latencyMs > 250
+                      ? 'text-amber-600'
+                      : 'text-emerald-600'
+                  }`}
+                />
+              </motion.span>
+              <span
+                className={`font-medium ${
+                  !wsConnected
+                    ? 'text-red-700'
+                    : latencyMs !== null && latencyMs > 250
+                    ? 'text-amber-700'
+                    : 'text-slate-700'
+                }`}
+              >
+                {wsConnected ? 'WS Live' : 'Reconnecting'}
+              </span>
+              <span className="text-slate-300" aria-hidden="true">
+                ·
+              </span>
+              <span
+                className={`font-mono tabular-nums ${
+                  !wsConnected
+                    ? 'text-red-600'
+                    : latencyMs !== null && latencyMs > 250
+                    ? 'text-amber-700'
+                    : 'text-slate-600'
+                }`}
+              >
+                {wsConnected && latencyMs !== null ? `${latencyMs} ms` : '-- ms'}
+              </span>
+            </div>
+
             <a
               href="/api/export/csv"
               download="transit-kafka-sentiment-stream.csv"
