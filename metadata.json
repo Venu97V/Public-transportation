@@ -1,0 +1,6 @@
+{
+  "name": "TransitPulse Kafka",
+  "description": "Real-time public transportation sentiment analysis and Apache Kafka stream monitoring platform for Big Data Tools and Technologies (BDT).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
